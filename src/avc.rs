@@ -14,14 +14,11 @@ pub struct AvcDecoderConfigurationRecord {
     pub sequence_parameter_set: Vec<u8>,
     pub picture_parameter_set: Vec<u8>,
 }
+
 impl AvcDecoderConfigurationRecord {
+
     pub(crate) fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
         write_u8!(writer, 1); // configuration_version
-
-        match self.profile_idc {
-            100 | 110 | 122 | 144 => track_panic!(ErrorKind::Unsupported),
-            _ => {}
-        }
         write_u8!(writer, self.profile_idc);
         write_u8!(writer, self.constraint_set_flag);
         write_u8!(writer, self.level_idc);
@@ -66,6 +63,10 @@ impl SpsSummary {
     }
 
     pub fn read_from<R: Read>(mut reader: R) -> Result<Self> {
+        let hd = track_io!(reader.read_u8())?;
+        if hd & 0x1F != 0x07 {
+            track_panic!(ErrorKind::InvalidInput, "invalid sps")
+        }
         let profile_idc = track_io!(reader.read_u8())?;
         let constraint_set_flag = track_io!(reader.read_u8())?;
         let level_idc = track_io!(reader.read_u8())?;
@@ -74,8 +75,24 @@ impl SpsSummary {
         let _seq_parameter_set_id = track!(reader.read_ue())?;
 
         match profile_idc {
-            100 | 110 | 122 | 244 | 44 | 83 | 86 | 118 | 128 => {
-                track_panic!(ErrorKind::Unsupported, "profile_idc={}", profile_idc)
+            // 100 | 110 | 122 | 244 | 44 | 83 | 86 | 118 | 128 => {
+            //     track_panic!(ErrorKind::Unsupported, "profile_idc={}", profile_idc)
+            // }
+            100 | 110 | 122 | 144 => {
+                let chroma_format_idc = reader.read_ue()?;
+                if chroma_format_idc == 3 {
+                    let _residual_colour_transform_flag = reader.read_bit()?;
+                }
+                let _bit_depth_luma_minus8 = reader.read_ue()?;
+                let _bit_depth_chroma_minus8 = reader.read_ue()?;
+                let _qpprime_y_zero_transform_bypass_flag = reader.read_bit()?;
+                let seq_scaling_matrix_present_flag = reader.read_bit()?;
+                if seq_scaling_matrix_present_flag != 0 {
+                    // let seq_scaling_list_present_flag[8];
+                    for _ in 0..8 {
+                        reader.read_bit()?;
+                    }
+                }
             }
             _ => {}
         }

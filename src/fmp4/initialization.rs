@@ -1,5 +1,5 @@
 use crate::aac::{AacProfile, ChannelConfiguration, SamplingFrequency};
-use crate::avc::AvcDecoderConfigurationRecord;
+use crate::avc::{AvcDecoderConfigurationRecord, SpsSummary};
 use crate::fmp4::{Mp4Box, AUDIO_TRACK_ID, VIDEO_TRACK_ID};
 use crate::io::{ByteCounter, WriteTo};
 use crate::{ErrorKind, Result};
@@ -38,11 +38,13 @@ impl Mp4Box for FileTypeBox {
     const BOX_TYPE: [u8; 4] = *b"ftyp";
 
     fn box_payload_size(&self) -> Result<u32> {
-        Ok(8)
+        Ok(16)
     }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_all!(writer, b"isom"); // major_brand
         write_u32!(writer, 512); // minor_version
+        write_all!(writer, b"isom");
+        write_all!(writer, b"avc1");
         Ok(())
     }
 }
@@ -176,8 +178,8 @@ pub struct MovieHeaderBox {
 impl Default for MovieHeaderBox {
     fn default() -> Self {
         MovieHeaderBox {
-            timescale: 1,
-            duration: 1,
+            timescale: 1000,
+            duration: 0,
         }
     }
 }
@@ -233,13 +235,13 @@ impl Mp4Box for TrackBox {
     fn box_payload_size(&self) -> Result<u32> {
         let mut size = 0;
         size += box_size!(self.tkhd_box);
-        size += box_size!(self.edts_box);
+        // size += box_size!(self.edts_box);
         size += box_size!(self.mdia_box);
         Ok(size)
     }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_box!(writer, self.tkhd_box);
-        write_box!(writer, self.edts_box);
+        // write_box!(writer, self.edts_box);
         write_box!(writer, self.mdia_box);
         Ok(())
     }
@@ -263,7 +265,7 @@ impl TrackHeaderBox {
             } else {
                 AUDIO_TRACK_ID
             },
-            duration: 1,
+            duration: 0,
             volume: if is_video { 0 } else { 256 },
             width: 0,
             height: 0,
@@ -393,8 +395,8 @@ pub struct MediaHeaderBox {
 impl Default for MediaHeaderBox {
     fn default() -> Self {
         MediaHeaderBox {
-            timescale: 0,
-            duration: 1,
+            timescale: 1000,
+            duration: 0,
         }
     }
 }
@@ -427,9 +429,9 @@ pub struct HandlerReferenceBox {
 impl HandlerReferenceBox {
     fn new(is_video: bool) -> Self {
         let name = if is_video {
-            "Video Handler"
+            "VideoHandler"
         } else {
-            "Sound Handler"
+            "SoundHandler"
         };
         HandlerReferenceBox {
             handler_type: if is_video { *b"vide" } else { *b"soun" },
@@ -766,6 +768,24 @@ pub struct AvcSampleEntry {
     pub avcc_box: AvcConfigurationBox,
 }
 impl AvcSampleEntry {
+    /// create AvcSampleEntry from sps and pps
+    pub fn new(sps: Vec<u8>, pps: Vec<u8>) -> Result<AvcSampleEntry> {
+        let sps_summary = SpsSummary::read_from(&sps[..])?;
+        Ok(AvcSampleEntry {
+            width: sps_summary.width() as u16,
+            height: sps_summary.height() as u16,
+            avcc_box: AvcConfigurationBox {
+                configuration: AvcDecoderConfigurationRecord {
+                    profile_idc: sps_summary.profile_idc,
+                    constraint_set_flag: sps_summary.constraint_set_flag,
+                    level_idc: sps_summary.level_idc,
+                    sequence_parameter_set: sps,
+                    picture_parameter_set: pps,
+                }
+            }
+        })
+    }
+    
     fn write_box_payload_without_avcc<W: Write>(&self, mut writer: W) -> Result<()> {
         write_zeroes!(writer, 6);
         write_u16!(writer, 1); // data_reference_index
